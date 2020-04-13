@@ -1,0 +1,162 @@
+import requests
+import json
+from openpyxl import Workbook
+import tkinter as tk
+from tkinter import ttk
+import pandas as pd
+import numpy as np
+import re
+import time
+import requests
+import json
+
+window = tk.Tk()
+window.title("山山评价监控软件")
+width = 320
+height = 160
+screenwidth = window.winfo_screenwidth()
+screenheight = window.winfo_screenheight()
+alignstr = '%dx%d+%d+%d' % (width, height, (screenwidth - width) / 2, (screenheight - height) / 2)
+window.geometry(alignstr)
+tk.Label(window, text='监控时长:').place(x=20, y=30)
+tk.Label(window, text='状态显示:').place(x=20, y=60)
+cmb = ttk.Combobox(window)
+cmb.pack()
+cmb['value'] = ('30分钟', '60分钟', '测试20秒')
+cmb.grid(padx=130, pady=30)
+cmb.current(0)
+
+
+class TaoBao:
+    lastPage = 1
+    url = "https://rate.tmall.com/list_detail_rate.htm"
+    header = {
+        "cookie": "",                                           #自己去找自己的cookie
+        "referer": "https://detail.tmall.com/item.htm",
+        "user-agent": "",                                       #这个也自己去找吧！很简单的就可以找出！
+    }
+    params = {
+        "itemId": "0",
+        "sellerId": "1658148935",
+        "currentPage": "1",
+        "order": "3",
+        "callback": "jsonp2359",
+    }
+
+    def __init__(self, id: str):
+        self.params['itemId'] = id
+
+    def getPageData(self, pageIndex: int):
+        self.params["currentPage"] = str(pageIndex)
+        req = requests.get(self.url, self.params, headers=self.header, timeout=2).content.decode(
+            'utf-8');  # 解码，并且去除str中影响json转换的字符（\n\rjsonp(...)）;
+        html = req[req.find('{'):req.rfind('}') + 1]
+        con = re.compile(r'ent":(.*?),"fromMemory".*?"rateContent":"(.*?)"')
+        cons = re.findall(con, html)
+        return cons
+
+    def setOrder(self, way: int):
+        self.params["order"] = way;
+
+    def getAllData(self):
+        Data = self.getPageData(1)
+        self.lastPage = Data['rateDetail']['paginator']['lastPage']
+        for i in range(2, self.lastPage + 1):
+            Data['rateDetail']['rateList'].extend(self.getPageData(i)['rateDetail']['rateList'])
+
+
+def jian():
+    data = pd.read_excel('评价监控.xlsx')        #同目录下新建个 评价监控.xlsx 表格
+    data = pd.DataFrame(data, columns=['商品ID', '商品名称', '差评词', '略过词', '发送钉钉'])
+    data['略过词'].fillna(0, inplace=True)
+    data = np.array(data).tolist()
+    m = 0
+    for i in data:
+        m += 1
+        taobao = TaoBao(i[0])
+        k = taobao.getPageData(1)
+        n = 0
+        s1, s2, s3 = '', '', ''
+        for p in k:
+            n += 1
+            succ = 0
+            print(i[3])
+            if i[3] != 0:
+                for lve in i[3].split(' '):
+                    if lve != '':
+                        if lve in p[1]:
+                            succ = 1
+                            break
+            if succ == 0:
+                for ci in i[2].split(' '):
+                    if ci != '':
+                        if ci in p[1]:
+                            s1 += '第%s条评价：【%s】\n%s\n' % (n, ci, p[1])
+                            break
+                        elif ci in p[0]:
+                            zhui = p[0].split('content":"')[-1][:-2]
+                            s1 += '第%s条追评：【%s】\n%s\n' % (n, ci, zhui)
+                            break
+        if s1 != '' and s2 != '':
+            s3 = '提醒：@%s %s有差评\n%s\n%s' % (i[4], i[1], s1, s2)
+        elif s1 != '' and s2 == '':
+            s3 = '提醒：@%s %s有差评\n%s' % (i[4], i[1], s1)
+        elif s1 == '' and s2 != '':
+            s3 = '提醒：@%s %s有差评\n%s' % (i[4], i[1], s2)
+        ding = DingTalk_Disaster()
+        ding.send_msg(s3)
+        var.set('正在检测：第%s条/共%s条' % (m, len(data)))
+        l.update()
+        print(s3)
+    tm = cmb.get()
+    if tm == '30分钟':
+        elap = 1800
+    elif tm == '60分钟':
+        elap = 3600
+    elif tm == '测试20秒':
+        elap = 20
+    while True:
+        if elap > 0:
+            time.sleep(1)
+            elap -= 1
+            minutes = int(elap / 60)
+            seconds = int(elap - minutes * 60.0)
+            var.set('距离下次检测倒计时：%2d:%2d' % (minutes, seconds))
+            l.update()
+        else:
+            jian()
+
+
+class DingTalk_Base:
+    def __init__(self):
+        self.__headers = {'Content-Type': 'application/json;charset=utf-8'}
+        self.url = ''
+
+    def send_msg(self, text):
+        json_text = {
+            "msgtype": "text",
+            "text": {
+                "content": text
+            },
+            "at": {
+                "atMobiles": [
+                    ""
+                ],
+                "isAtAll": False
+            }
+        }
+        return requests.post(self.url, json.dumps(json_text), headers=self.__headers).content
+
+
+class DingTalk_Disaster(DingTalk_Base):
+    def __init__(self):
+        super().__init__()
+        self.url = 'https://oapi.dingtalk.com/robot/send?access_token=XXXXXXXXX'    #插入自己的钉钉机器人地址
+
+
+var = tk.StringVar()
+var.set('暂未开启')
+l = tk.Label(window, textvariable=var, width=23, bg='#ffffff')
+l.place(x=130, y=60)
+btn_login = tk.Button(window, text="评价监控", command=jian, width=30, height=2).place(x=50, y=96)
+window.mainloop()
