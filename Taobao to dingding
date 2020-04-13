@@ -11,7 +11,7 @@ import requests
 import json
 
 window = tk.Tk()
-window.title("山山评价监控软件")
+window.title("评价监控软件")
 width = 320
 height = 160
 screenwidth = window.winfo_screenwidth()
